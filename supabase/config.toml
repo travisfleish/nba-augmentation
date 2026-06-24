@@ -1,0 +1,42 @@
+# Supabase config for the NBA Augmentation project.
+# Linked remote project ref: ewmqfwzfdqkedhkvwhwi
+# Use:  supabase link --project-ref ewmqfwzfdqkedhkvwhwi
+#       supabase functions deploy inventory-mcp
+project_id = "nba-augmentation"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+# Match the remote Postgres major version.
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+
+# Inventory MCP server — public prototype (no JWT). Keeps CLI deploys
+# consistent with how it was deployed (verify_jwt = false).
+[functions.inventory-mcp]
+enabled = true
+verify_jwt = false
