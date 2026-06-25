@@ -33,7 +33,9 @@ function enrichGames(rows) {
 }
 
 // ---------------- DEMO backend (in-memory) ----------------
-const refs = buildRefs(seed)
+function demoRefs() {
+  return buildRefs(seed)
+}
 let demoGames = structuredClone(seed.games)
 let demoPackages = []
 let demoPkgId = 1
@@ -51,15 +53,37 @@ const demo = {
   },
   async valuatedGames() {
     const source = demoProjection ? buildProjectionSeason(demoGames) : demoGames
-    const rows = valuateAll(source, refs).sort((a, b) =>
+    const rows = valuateAll(source, demoRefs()).sort((a, b) =>
       a.game_date.localeCompare(b.game_date) || (a.game_time_et || '').localeCompare(b.game_time_et || '')
     )
     return enrichGames(rows)
+  },
+  async tiers() {
+    return [...seed.tiers].sort((a, b) => a.tier.localeCompare(b.tier))
+  },
+  async settings() {
+    return { ...seed.settings }
   },
   async updateGame(id, patch) {
     const g = demoGames.find((x) => x.id === id)
     if (g) Object.assign(g, patch)
     return g
+  },
+  async updateTeam(id, patch) {
+    const t = seed.teams.find((x) => x.id === id || x.full_name === id)
+    if (!t) throw new Error('Team not found')
+    Object.assign(t, patch)
+    return { ...t, conference: t.conference ?? teamConference(t.full_name) }
+  },
+  async updateTier(tierName, patch) {
+    const t = seed.tiers.find((x) => x.tier === tierName)
+    if (!t) throw new Error('Tier not found')
+    Object.assign(t, patch)
+    return { ...t }
+  },
+  async updateSetting(key, value) {
+    seed.settings[key] = value
+    return { key, value }
   },
   async savePackage(name, advertiser, gameIds) {
     const pkg = { id: demoPkgId++, name, advertiser, game_ids: [...gameIds], created_at: new Date().toISOString() }
@@ -104,8 +128,39 @@ const live = {
     if (error) throw error
     return data
   },
+  async tiers() {
+    const { data, error } = await supabase.from('tiers').select('*').order('tier')
+    if (error) throw error
+    return data
+  },
+  async settings() {
+    const { data, error } = await supabase.from('settings').select('key,value')
+    if (error) throw error
+    const out = {}
+    for (const row of data) out[row.key] = Number(row.value)
+    return out
+  },
   async updateGame(id, patch) {
     const { data, error } = await supabase.from('games').update(patch).eq('id', id).select().single()
+    if (error) throw error
+    return data
+  },
+  async updateTeam(id, patch) {
+    const { data, error } = await supabase.from('teams').update(patch).eq('id', id).select().single()
+    if (error) throw error
+    return data
+  },
+  async updateTier(tierName, patch) {
+    const { data, error } = await supabase.from('tiers').update(patch).eq('tier', tierName).select().single()
+    if (error) throw error
+    return data
+  },
+  async updateSetting(key, value) {
+    const { data, error } = await supabase
+      .from('settings')
+      .upsert({ key, value }, { onConflict: 'key' })
+      .select()
+      .single()
     if (error) throw error
     return data
   },

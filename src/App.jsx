@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db, MODE } from './lib/data.js'
 import Logo from './components/brand/Logo.jsx'
+import ManualUpdates from './components/ManualUpdates.jsx'
 
 const STATUSES = ['Open', 'Pitched', 'Sold', 'Closed', 'N/A']
 const TIER_ORDER = { 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3, 'Tier 4': 4, 'Out of Range': 5 }
@@ -184,12 +185,17 @@ export default function App() {
         <button className={tab === 'package' ? 'active' : ''} onClick={() => setTab('package')}>
           Package Builder
         </button>
+        <button className={tab === 'manual' ? 'active' : ''} onClick={() => setTab('manual')}>
+          Manual Updates
+        </button>
       </div>
 
-      <Filters
-        {...{ team, setTeam, status, setStatus, from, setFrom, to, setTo, augTeams }}
-        count={filtered.length}
-      />
+      {tab !== 'manual' && (
+        <Filters
+          {...{ team, setTeam, status, setStatus, from, setFrom, to, setTo, augTeams }}
+          count={filtered.length}
+        />
+      )}
 
       {loading ? (
         <div className="card">
@@ -204,7 +210,7 @@ export default function App() {
             onContact={(id, v) => setGameField(id, { brand_contact: v })}
           />
         </div>
-      ) : (
+      ) : tab === 'package' ? (
         <div className="layout">
           <div className="card">
             <Table
@@ -241,6 +247,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      ) : (
+        <ManualUpdates
+          games={games}
+          teams={teams}
+          onRefresh={refresh}
+          setGameField={setGameField}
+          projection2027={projection2027}
+          flash={flash}
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}
