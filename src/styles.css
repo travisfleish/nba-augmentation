@@ -292,6 +292,9 @@ header.top .sub {
   min-width: 120px;
 }
 
+.search-field { flex: 1; min-width: 200px; }
+.search-field input { width: 100%; min-width: 0; }
+
 .field select:focus,
 .field input:focus {
   outline: none;

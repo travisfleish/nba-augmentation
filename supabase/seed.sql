@@ -52,11 +52,11 @@ insert into teams(short_name,full_name,broadcaster,timezone,dma_market,dma_popul
 ('Suns', 'Phoenix Suns', 'N/A', 'Mountain', 'Phoenix (Prescott)', 4974000, 1, 31, 0, 32, false),
 ('NY Knicks', 'New York Knicks', 'N/A', 'Eastern', 'New York', 7624000, 1, 30, 0, 31, false),
 ('Trail Blazers', 'Portland Trail Blazers', 'N/A', 'Pacific', 'Portland, OR', 2398000, 1, 30, 0, 31, false),
-('Nets', 'Brooklyn Nets', 'YES Network', 'Eastern', 'New York', 7624000, 1, 29, 0, 30, true),
+('Nets', 'Brooklyn Nets', 'YES Network', 'Eastern', 'New York', 7624000, 18, 29, 35000, 30, true),
 ('Mavericks', 'Dallas Mavericks', 'N/A', 'Central', 'Dallas–Fort Worth', 7637000, 1, 27, 0, 28, false),
 ('Nuggets', 'Denver Nuggets', 'N/A', 'Pacific', 'Denver', 2960000, 1, 26, 0, 27, false),
 ('Thunder', 'Oklahoma City Thunder', 'N/A', 'Central', 'Oklahoma City', 1425000, 1, 25, 0, 26, false),
-('Grizzlies', 'Memphis Grizzlies', 'FanDuel Sports Network', 'Central', 'Memphis', 1324000, 1, 24, 0, 25, true),
+('Grizzlies', 'Memphis Grizzlies', 'FanDuel Sports Network', 'Central', 'Memphis', 1324000, 15, 24, 12000, 25, true),
 ('Raptors', 'Toronto Raptors', 'N/A', 'Eastern', 'Toronto (Canada, not a U.S. Nielsen DMA)', 8300000, 1, 24, 0, 25, false),
 ('Wizards', 'Washington Wizards', 'N/A', 'Eastern', 'Washington, D.C. (Hagerstown)', 6216000, 1, 24, 0, 25, false),
 ('Pelicans', 'New Orleans Pelicans', 'N/A', 'Central', 'New Orleans', 1269000, 1, 21, 0, 22, false);

@@ -8,6 +8,19 @@ const TIER_ORDER = { 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3, 'Tier 4': 4, 'Out of
 const STATUS_ORDER = { Open: 0, Pitched: 1, Sold: 2, Closed: 3, 'N/A': 4 }
 const NUMERIC_SORT_KEYS = new Set(['tier_score', 'cpm', 'impressions', 'game_cost'])
 
+const SEARCH_ALIASES = {
+  impression: ['impression', 'impressions', 'impr', 'amount', 'impression amount'],
+  cost: ['cost', 'game cost', 'price', 'spend'],
+  cpm: ['cpm', 'rate'],
+  tier: ['tier', 'tiers'],
+  score: ['score', 'tier score'],
+  rsn: ['rsn', 'network', 'feed', 'broadcaster'],
+  status: ['status'],
+  brand: ['brand', 'contact', 'advertiser'],
+  date: ['date'],
+  matchup: ['matchup', 'game', 'vs', 'at'],
+}
+
 const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-US'))
 const usd = (n) => (n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 }))
 const usd2 = (n) => (n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
@@ -26,6 +39,7 @@ export default function App() {
   const [status, setStatus] = useState('All')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [search, setSearch] = useState('')
 
   // package selection
   const [picked, setPicked] = useState(() => new Set())
@@ -85,9 +99,10 @@ export default function App() {
       if (status !== 'All' && g.status !== status) return false
       if (from && g.game_date < from) return false
       if (to && g.game_date > to) return false
+      if (search.trim() && !matchesSearch(g, search)) return false
       return true
     })
-  }, [games, team, status, from, to])
+  }, [games, team, status, from, to, search])
 
   async function setGameField(id, patch) {
     if (projection2027) {
@@ -192,7 +207,7 @@ export default function App() {
 
       {tab !== 'manual' && (
         <Filters
-          {...{ team, setTeam, status, setStatus, from, setFrom, to, setTo, augTeams }}
+          {...{ team, setTeam, status, setStatus, from, setFrom, to, setTo, search, setSearch, augTeams }}
           count={filtered.length}
         />
       )}
@@ -263,9 +278,18 @@ export default function App() {
   )
 }
 
-function Filters({ team, setTeam, status, setStatus, from, setFrom, to, setTo, augTeams, count }) {
+function Filters({ team, setTeam, status, setStatus, from, setFrom, to, setTo, search, setSearch, augTeams, count }) {
   return (
     <div className="filters">
+      <div className="field search-field">
+        <label>Search</label>
+        <input
+          type="search"
+          placeholder="Team, RSN, impressions, status…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
       <div className="field">
         <label>Team</label>
         <select value={team} onChange={(e) => setTeam(e.target.value)}>
@@ -325,6 +349,113 @@ function compareRows(a, b, key) {
 
 function rsnFor(g) {
   return (g.aug_side === 'home' ? g.home_rsn : g.away_rsn) || ''
+}
+
+function normalizeSearchQuery(q) {
+  return q.trim().toLowerCase().replace(/,/g, '')
+}
+
+function gameSearchHaystack(g) {
+  const rsn = rsnFor(g)
+  return [
+    g.game_date,
+    g.home_team,
+    g.away_team,
+    g.aug_team,
+    short(g.home_team),
+    short(g.away_team),
+    short(g.aug_team),
+    g.home_rsn,
+    g.away_rsn,
+    rsn,
+    g.tier,
+    g.status,
+    g.brand_contact,
+    g.aug_conference,
+    g.aug_timezone,
+    String(g.tier_score ?? ''),
+    String(g.cpm ?? ''),
+    String(g.impressions ?? ''),
+    String(g.game_cost ?? ''),
+    fmt(g.impressions),
+    usd(g.cpm),
+    usd(g.game_cost),
+    `${short(g.away_team)} @ ${short(g.home_team)}`,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function fieldValuesForSearch(g, field) {
+  switch (field) {
+    case 'impression':
+      return [g.impressions, fmt(g.impressions)].filter((v) => v != null).map(String)
+    case 'cost':
+      return [g.game_cost, usd(g.game_cost)].filter((v) => v != null).map(String)
+    case 'cpm':
+      return [g.cpm, usd(g.cpm)].filter((v) => v != null).map(String)
+    case 'tier':
+      return [g.tier].filter(Boolean).map(String)
+    case 'score':
+      return [g.tier_score].filter((v) => v != null).map(String)
+    case 'rsn':
+      return [g.home_rsn, g.away_rsn, rsnFor(g)].filter(Boolean).map(String)
+    case 'status':
+      return [g.status].filter(Boolean).map(String)
+    case 'brand':
+      return [g.brand_contact].filter(Boolean).map(String)
+    case 'date':
+      return [g.game_date].filter(Boolean).map(String)
+    case 'matchup':
+      return [
+        g.home_team,
+        g.away_team,
+        short(g.home_team),
+        short(g.away_team),
+        `${short(g.away_team)} @ ${short(g.home_team)}`,
+      ].filter(Boolean).map(String)
+    default:
+      return []
+  }
+}
+
+function aliasFieldForToken(token) {
+  for (const [field, aliases] of Object.entries(SEARCH_ALIASES)) {
+    if (aliases.includes(token)) return field
+    if (aliases.some((a) => a.includes(token) && token.length >= 3)) return field
+  }
+  return null
+}
+
+function tokenMatches(token, g, haystack) {
+  const bare = token.replace(/[$,]/g, '')
+  const field = aliasFieldForToken(token)
+  if (field) {
+    const values = fieldValuesForSearch(g, field).join(' ').toLowerCase()
+    return values.length > 0
+  }
+  if (/^[\d.]+$/.test(bare)) {
+    return haystack.includes(bare)
+  }
+  return haystack.includes(token) || (bare.length > 1 && haystack.includes(bare))
+}
+
+function matchesSearch(g, query) {
+  const normalized = normalizeSearchQuery(query)
+  if (!normalized) return true
+
+  const haystack = gameSearchHaystack(g)
+
+  // Phrase aliases (e.g. "impression amount") — match if the mapped field has data
+  for (const [field, aliases] of Object.entries(SEARCH_ALIASES)) {
+    if (aliases.includes(normalized)) {
+      return fieldValuesForSearch(g, field).length > 0
+    }
+  }
+
+  const tokens = normalized.split(/\s+/).filter(Boolean)
+  return tokens.every((t) => tokenMatches(t, g, haystack))
 }
 
 function SortTh({ label, sortKey, sortBy, sortDir, onSort, className }) {
