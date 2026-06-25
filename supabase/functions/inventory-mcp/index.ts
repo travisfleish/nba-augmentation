@@ -462,7 +462,7 @@ async function getInventoryMode() {
   const enabled = await isProjectionEnabled();
   return {
     summary: enabled
-      ? "Default season is upcoming 2027 — all inventory Open, dates +1 year."
+      ? "Default season is upcoming 2027 — full Oct–Apr slate, all inventory Open."
       : "Default season is last season (2026) — real Sold/Closed/Pitched statuses.",
     season: seasonLabel(enabled),
     mode: enabled ? "projection_2027" : "current",
@@ -549,7 +549,8 @@ async function handleMessage(msg: any): Promise<unknown | null> {
         serverInfo: SERVER_INFO,
         instructions:
           "NBA augmentation inventory for the Genius Sports commercial team. " +
-          "TWO SEASONS: (1) UPCOMING 2027 is the DEFAULT — all games Open, dates +1 year. Use for availability, " +
+          "TWO SEASONS: (1) UPCOMING 2027 is the DEFAULT — full season mid-Oct 2026 through mid-Apr 2027, " +
+          "all games Open. Use for availability, RFPs, and package building. " +
           "RFPs, and package building. (2) LAST SEASON 2026 has real Sold/Pitched/Closed history. " +
           "RULE: Any question about 'sold', 'pitched', 'closed', 'last year', or 'last season' MUST use season='2026' " +
           "or season='last' on inventory_summary/list_inventory. Without it, Sold queries return 0 (2027 is all Open). " +

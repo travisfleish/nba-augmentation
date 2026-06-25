@@ -29,7 +29,9 @@ so you can click around immediately. A **DEMO** badge shows in the header.
    - `../supabase/migrations/0002_policies.sql` (prototype RLS)
    - `../supabase/migrations/0003_projection.sql`  (2027 projection views + conference)
    - `../supabase/migrations/0004_projection_default.sql` (default to upcoming 2027)
+   - `../supabase/migrations/0005_projection_full_season.sql` (full Oct–Apr 2027 slate)
    - `../supabase/seed.sql`                      (teams, schedule, inventory)
+   - `../supabase/projection_games.sql`          (920-game upcoming season)
 3. Copy `.env.example` → `.env.local` and paste your Project URL + anon key.
 4. `npm run dev`. The badge flips to **LIVE · Supabase** and all reads/writes hit Postgres.
 
@@ -40,7 +42,7 @@ so you can click around immediately. A **DEMO** badge shows in the header.
 Deploy `supabase/functions/inventory-mcp` as an Edge Function. It exposes tools to list inventory,
 summarize availability, and **estimate packages by budget** (e.g. a $500k RFP).
 
-**Default season is upcoming 2027** (all games Open). No setup needed for package-building questions.
+**Default season is upcoming 2027** (~920 games, mid-Oct 2026 through mid-Apr 2027, all Open).
 
 For **last season (2026)** historical questions — sold counts, what was pitched, etc. — pass
 `season: "2026"` (or `"last"`) on any inventory tool, plus status filters as needed.

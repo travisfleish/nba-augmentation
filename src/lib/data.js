@@ -4,6 +4,7 @@
 import { createClient } from '@supabase/supabase-js'
 import seed from '../seed.json'
 import { buildRefs, valuateAll } from './valuation.js'
+import { buildProjectionSeason } from './projection.js'
 
 const URL = import.meta.env.VITE_SUPABASE_URL
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -49,7 +50,8 @@ const demo = {
     demoProjection = enabled
   },
   async valuatedGames() {
-    const rows = valuateAll(demoGames, refs).sort((a, b) =>
+    const source = demoProjection ? buildProjectionSeason(demoGames) : demoGames
+    const rows = valuateAll(source, refs).sort((a, b) =>
       a.game_date.localeCompare(b.game_date) || (a.game_time_et || '').localeCompare(b.game_time_et || '')
     )
     return enrichGames(rows)

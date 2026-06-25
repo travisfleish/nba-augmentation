@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db, MODE } from './lib/data.js'
-import { projectGamesFor2027 } from './lib/projection.js'
 import Logo from './components/brand/Logo.jsx'
 
 const STATUSES = ['Open', 'Pitched', 'Sold', 'Closed', 'N/A']
@@ -48,10 +47,8 @@ export default function App() {
   }, [projection2027])
 
   const games = useMemo(() => {
-    let base = rawGames
-    if (MODE === 'demo' && projection2027) base = projectGamesFor2027(base)
-    if (!projection2027 || projectionOverrides.size === 0) return base
-    return base.map((g) => {
+    if (!projection2027 || projectionOverrides.size === 0) return rawGames
+    return rawGames.map((g) => {
       const patch = projectionOverrides.get(g.id)
       return patch ? { ...g, ...patch } : g
     })
@@ -64,7 +61,7 @@ export default function App() {
       if (enabled) setStatus('All')
       await refresh()
       if (enabled) {
-        flash('Upcoming 2027 season — all games Open. Status edits are local-only.')
+        flash('Upcoming 2027 season (Oct–Apr) — all games Open. Status edits are local-only.')
       }
     } catch (e) {
       flash('Could not update projection mode: ' + e.message)
