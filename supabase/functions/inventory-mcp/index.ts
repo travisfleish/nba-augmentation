@@ -41,7 +41,46 @@ function normalizeTiers(tiers?: string[]): string[] | undefined {
   });
 }
 
-// Apply common filters to a query against the game_valuation view.
+const GAME_FIELDS =
+  "id,game_date,game_time_et,day_of_week,home_team,away_team,aug_team,opp_team,home_rsn,away_rsn,status,brand_contact,national_exclusive,tier,cpm,tier_score,impressions,game_cost,aug_conference,aug_timezone,aug_dma_market";
+
+let projectionCache: { at: number; enabled: boolean } | null = null;
+const PROJECTION_TTL_MS = 5000;
+
+async function isProjectionEnabled(): Promise<boolean> {
+  const now = Date.now();
+  if (projectionCache && now - projectionCache.at < PROJECTION_TTL_MS) {
+    return projectionCache.enabled;
+  }
+  const { data, error } = await sb
+    .from("settings")
+    .select("value")
+    .eq("key", "projection_2027_enabled")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  // Default to upcoming 2027 projection when unset.
+  const enabled = data == null ? true : Number(data.value) === 1;
+  projectionCache = { at: now, enabled };
+  return enabled;
+}
+
+function seasonLabel(projection: boolean): string {
+  return projection ? "2027" : "2026";
+}
+
+async function resolveProjection(args: Record<string, unknown>): Promise<boolean> {
+  const season = args.season != null ? String(args.season).trim().toLowerCase() : null;
+  if (season) {
+    if (["2027", "upcoming", "next", "projection"].includes(season)) return true;
+    if (["2026", "last", "previous", "prior"].includes(season)) return false;
+    throw new Error(
+      `Unknown season '${args.season}'. Use '2027' (upcoming, default) or '2026' (last season).`,
+    );
+  }
+  if (typeof args.use_projection === "boolean") return args.use_projection;
+  return await isProjectionEnabled();
+}
+
 function applyFilters(q: any, a: Record<string, unknown>) {
   const status = a.status as string[] | undefined;
   if (status && status.length) q = q.in("status", status);
@@ -51,8 +90,10 @@ function applyFilters(q: any, a: Record<string, unknown>) {
 
   if (a.team) {
     const t = String(a.team).replace(/[%,]/g, " ");
-    q = q.or(`home_team.ilike.%${t}%,away_team.ilike.%${t}%`);
+    q = q.or(`home_team.ilike.%${t}%,away_team.ilike.%${t}%,aug_team.ilike.%${t}%`);
   }
+  if (a.aug_conference) q = q.eq("aug_conference", a.aug_conference);
+  if (a.aug_timezone) q = q.eq("aug_timezone", a.aug_timezone);
   if (a.date_from) q = q.gte("game_date", a.date_from);
   if (a.date_to) q = q.lte("game_date", a.date_to);
   if (a.day_of_week) q = q.eq("day_of_week", a.day_of_week);
@@ -62,8 +103,22 @@ function applyFilters(q: any, a: Record<string, unknown>) {
   return q;
 }
 
-const GAME_FIELDS =
-  "id,game_date,game_time_et,day_of_week,home_team,away_team,aug_team,opp_team,home_rsn,away_rsn,status,brand_contact,national_exclusive,tier,cpm,tier_score,impressions,game_cost";
+function selectByBudget(games: any[], budget: number) {
+  const sorted = [...games].sort(
+    (a, b) => Number(b.impressions ?? 0) - Number(a.impressions ?? 0),
+  );
+  const selected: any[] = [];
+  let cost = 0;
+  for (const g of sorted) {
+    const gameCost = Number(g.game_cost ?? 0);
+    if (cost + gameCost <= budget) {
+      selected.push(g);
+      cost += gameCost;
+    }
+  }
+  selected.sort((a, b) => String(a.game_date).localeCompare(String(b.game_date)));
+  return selected;
+}
 
 function fmtUSD(n: number): string {
   return "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -74,6 +129,18 @@ function fmtUSD(n: number): string {
 // ----------------------------------------------------------------------------
 
 const FILTER_PROPS = {
+  season: {
+    type: "string",
+    enum: ["2027", "2026", "upcoming", "last"],
+    description:
+      "Which season to query. Default (omit or '2027'/'upcoming'): upcoming 2027 projection — dates +1 year, all inventory Open. " +
+      "Use '2026' or 'last' for last season with real statuses (Sold, Closed, Pitched, etc.) — e.g. 'how many did we sell last season'.",
+  },
+  use_projection: {
+    type: "boolean",
+    description:
+      "Legacy override: true = 2027 projection, false = last season (2026). Prefer the season parameter.",
+  },
   status: {
     type: "array",
     items: { type: "string", enum: STATUSES },
@@ -82,7 +149,21 @@ const FILTER_PROPS = {
   },
   team: {
     type: "string",
-    description: "Filter to games involving this team (matches home or away, partial name OK, e.g. 'Lakers').",
+    description:
+      "Filter to games involving this team (matches home, away, or aug team; partial name OK, e.g. 'Lakers').",
+  },
+  aug_conference: {
+    type: "string",
+    enum: ["Western", "Eastern"],
+    description:
+      "Filter to games where the augmented (inventory) team is in this NBA conference. " +
+      "Use 'Western' for west-coast RFPs targeting Pacific aug teams (Warriors, Kings, Clippers).",
+  },
+  aug_timezone: {
+    type: "string",
+    enum: ["Pacific", "Mountain", "Central", "Eastern"],
+    description:
+      "Filter to games where the augmented team is in this US timezone. Combine with aug_conference for coastal west inventory.",
   },
   tier: {
     type: "array",
@@ -102,7 +183,8 @@ const TOOLS = [
   {
     name: "list_inventory",
     description:
-      "List individual NBA augmentation games with their status, value tier, CPM, projected impressions and cost. Use to answer 'what's available', 'what Lakers inventory is open in November', etc. Defaults to Open (available) games only.",
+      "List individual NBA augmentation games with status, tier, CPM, impressions and cost. " +
+      "Defaults to upcoming 2027 season (Open inventory). For last-season results, pass season='2026'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -114,7 +196,8 @@ const TOOLS = [
   {
     name: "inventory_summary",
     description:
-      "Aggregate roll-up of inventory matching the filters: counts by status and by tier, total projected impressions and total value (sum of game cost) for available games. Use for 'how much inventory is left', 'what's our open inventory worth'.",
+      "Aggregate roll-up: counts by status and tier, open inventory value. " +
+      "Defaults to upcoming 2027. For last-season sold/pitched totals, pass season='2026' and filter status as needed.",
     inputSchema: { type: "object", properties: { ...FILTER_PROPS } },
   },
   {
@@ -126,25 +209,60 @@ const TOOLS = [
         id: { type: "integer", description: "Game id." },
         team: { type: "string", description: "A team in the matchup (used with date if id not given)." },
         date: { type: "string", description: "Game date YYYY-MM-DD (used with team)." },
+        season: FILTER_PROPS.season,
+        use_projection: FILTER_PROPS.use_projection,
       },
     },
   },
   {
     name: "estimate_package",
     description:
-      "Estimate a media package WITHOUT saving it. Provide either explicit game_ids OR filter criteria to auto-select games, plus an impression target. Returns the games included, total projected impressions vs target, total cost, blended CPM, and flight dates. Mirrors the app's Package Builder math.",
+      "Estimate a media package WITHOUT saving it. Defaults to upcoming 2027 Open inventory. " +
+      "Use budget (USD) for spend-constrained RFPs, or target_impressions for an impression goal. " +
+      "For historical what-if packages on last season's slate, pass season='2026'.",
     inputSchema: {
       type: "object",
       properties: {
         game_ids: { type: "array", items: { type: "integer" }, description: "Explicit game ids to include." },
         ...FILTER_PROPS,
+        budget: {
+          type: "number",
+          description: "Maximum total package cost in USD. Auto-selects Open games matching filters until budget is reached.",
+        },
         target_impressions: {
           type: "number",
-          description: "Impression goal to measure against (default 14,000,000).",
+          description: "Impression goal to measure against (default 14,000,000). Used for reporting when budget is set.",
           default: 14000000,
         },
-        limit: { type: "integer", description: "When auto-selecting by filter, cap games considered (default 100).", default: 100 },
+        limit: {
+          type: "integer",
+          description: "When auto-selecting by filter, max candidate games to consider (default 500).",
+          default: 500,
+        },
       },
+    },
+  },
+  {
+    name: "get_inventory_mode",
+    description:
+      "Returns the default season catalog: upcoming 2027 projection (Open inventory) unless switched to last season.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_inventory_mode",
+    description:
+      "Change the global default season for queries without an explicit season parameter. " +
+      "Default is projection_2027 (upcoming). Switch to current only if you want last season as the default.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["current", "projection_2027"],
+          description: "current = real inventory statuses; projection_2027 = next-season demo (all Open).",
+        },
+      },
+      required: ["mode"],
     },
   },
   {
@@ -162,27 +280,33 @@ const TOOLS = [
 async function listInventory(a: Record<string, unknown>) {
   const limit = Math.min(Number(a.limit ?? 50) || 50, 200);
   const status = (a.status as string[] | undefined) ?? ["Open"];
-  let q = sb.from("game_valuation").select(GAME_FIELDS);
+  const projection = await resolveProjection(a);
+  const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
+  let q = sb.from(table).select(GAME_FIELDS);
   q = applyFilters(q, { ...a, status });
   q = q.order("game_date", { ascending: true }).limit(limit);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   const rows = data ?? [];
+  const season = seasonLabel(projection);
   const summary =
-    `${rows.length} game(s)` +
+    `${rows.length} game(s) for ${season} season` +
     (rows.length === limit ? ` (capped at ${limit})` : "") +
     `, statuses: ${status.join(", ")}.`;
-  return { summary, games: rows };
+  return { summary, season, inventory_mode: table, games: rows };
 }
 
 async function inventorySummary(a: Record<string, unknown>) {
+  const projection = await resolveProjection(a);
+  const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
   let q = sb
-    .from("game_valuation")
+    .from(table)
     .select("status,tier,cpm,impressions,game_cost,game_date");
   q = applyFilters(q, a); // no status default → summarize everything matching
   const { data, error } = await q.limit(2000);
   if (error) throw new Error(error.message);
   const rows = data ?? [];
+  const season = seasonLabel(projection);
 
   const byStatus: Record<string, number> = {};
   const byTier: Record<string, number> = {};
@@ -198,10 +322,13 @@ async function inventorySummary(a: Record<string, unknown>) {
   }
   return {
     summary:
-      `${rows.length} game(s) match. Open: ${byStatus["Open"] ?? 0}, ` +
-      `Pitched: ${byStatus["Pitched"] ?? 0}, Sold: ${byStatus["Sold"] ?? 0}. ` +
+      `${rows.length} game(s) for ${season} season. Open: ${byStatus["Open"] ?? 0}, ` +
+      `Pitched: ${byStatus["Pitched"] ?? 0}, Sold: ${byStatus["Sold"] ?? 0}, ` +
+      `Closed: ${byStatus["Closed"] ?? 0}. ` +
       `Open inventory ≈ ${Math.round(availImpr).toLocaleString("en-US")} impressions, ` +
       `${fmtUSD(availValue)} value.`,
+    season,
+    inventory_mode: table,
     total_games: rows.length,
     by_status: byStatus,
     by_tier: byTier,
@@ -213,12 +340,14 @@ async function inventorySummary(a: Record<string, unknown>) {
 }
 
 async function getGame(a: Record<string, unknown>) {
-  let q = sb.from("game_valuation").select(GAME_FIELDS);
+  const projection = await resolveProjection(a);
+  const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
+  let q = sb.from(table).select(GAME_FIELDS);
   if (a.id != null) {
     q = q.eq("id", a.id);
   } else if (a.team) {
     const t = String(a.team).replace(/[%,]/g, " ");
-    q = q.or(`home_team.ilike.%${t}%,away_team.ilike.%${t}%`);
+    q = q.or(`home_team.ilike.%${t}%,away_team.ilike.%${t}%,aug_team.ilike.%${t}%`);
     if (a.date) q = q.eq("game_date", a.date);
   } else {
     throw new Error("Provide an id, or a team (optionally with a date).");
@@ -226,28 +355,36 @@ async function getGame(a: Record<string, unknown>) {
   const { data, error } = await q.limit(10);
   if (error) throw new Error(error.message);
   const rows = data ?? [];
-  return { count: rows.length, games: rows };
+  return { count: rows.length, season: seasonLabel(projection), inventory_mode: table, games: rows };
 }
 
 async function estimatePackage(a: Record<string, unknown>) {
   const target = Number(a.target_impressions ?? 14000000) || 14000000;
+  const budget = a.budget != null ? Number(a.budget) : null;
+  const projection = await resolveProjection(a);
+  const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
+  const season = seasonLabel(projection);
   let rows: any[] = [];
   if (Array.isArray(a.game_ids) && a.game_ids.length) {
     const { data, error } = await sb
-      .from("game_valuation")
+      .from(table)
       .select(GAME_FIELDS)
       .in("id", a.game_ids as number[]);
     if (error) throw new Error(error.message);
     rows = data ?? [];
   } else {
-    const limit = Math.min(Number(a.limit ?? 100) || 100, 200);
+    const limit = Math.min(Number(a.limit ?? 500) || 500, 2000);
     const status = (a.status as string[] | undefined) ?? ["Open"];
-    let q = sb.from("game_valuation").select(GAME_FIELDS);
+    let q = sb.from(table).select(GAME_FIELDS);
     q = applyFilters(q, { ...a, status });
     q = q.order("game_date", { ascending: true }).limit(limit);
     const { data, error } = await q;
     if (error) throw new Error(error.message);
     rows = data ?? [];
+  }
+
+  if (budget != null && budget > 0) {
+    rows = selectByBudget(rows, budget);
   }
 
   let impr = 0;
@@ -259,21 +396,58 @@ async function estimatePackage(a: Record<string, unknown>) {
   const blendedCpm = impr > 0 ? Math.round((cost / impr) * 1000 * 100) / 100 : 0;
   const dates = rows.map((r) => r.game_date).filter(Boolean).sort();
 
+  const budgetNote = budget != null && budget > 0
+    ? `${fmtUSD(cost)} of ${fmtUSD(budget)} budget (${Math.round((cost / budget) * 10000) / 100}%). `
+    : "";
+
   return {
     summary:
-      `${rows.length} game(s): ${Math.round(impr).toLocaleString("en-US")} impressions ` +
+      `${rows.length} game(s) for ${season} season: ${Math.round(impr).toLocaleString("en-US")} impressions ` +
       `(${((impr / target) * 100).toFixed(0)}% of ${target.toLocaleString("en-US")} target), ` +
+      budgetNote +
       `${fmtUSD(cost)} total, ${fmtUSD(blendedCpm)} blended CPM.`,
+    season,
+    inventory_mode: table,
     games_count: rows.length,
     total_impressions: Math.round(impr),
     target_impressions: target,
     pct_of_target: Math.round((impr / target) * 10000) / 100,
+    budget: budget ?? null,
+    budget_used: budget != null ? Math.round(cost * 100) / 100 : null,
+    budget_remaining: budget != null ? Math.round((budget - cost) * 100) / 100 : null,
+    pct_of_budget: budget != null && budget > 0 ? Math.round((cost / budget) * 10000) / 100 : null,
     total_cost: Math.round(cost * 100) / 100,
     blended_cpm: blendedCpm,
     flight_start: dates[0] ?? null,
     flight_end: dates[dates.length - 1] ?? null,
     games: rows,
   };
+}
+
+async function getInventoryMode() {
+  const enabled = await isProjectionEnabled();
+  return {
+    summary: enabled
+      ? "Default season is upcoming 2027 — all inventory Open, dates +1 year."
+      : "Default season is last season (2026) — real Sold/Closed/Pitched statuses.",
+    season: seasonLabel(enabled),
+    mode: enabled ? "projection_2027" : "current",
+    projection_2027_enabled: enabled,
+  };
+}
+
+async function setInventoryMode(a: Record<string, unknown>) {
+  const mode = String(a.mode ?? "");
+  if (mode !== "current" && mode !== "projection_2027") {
+    throw new Error("mode must be 'current' or 'projection_2027'.");
+  }
+  const enabled = mode === "projection_2027" ? 1 : 0;
+  const { error } = await sb
+    .from("settings")
+    .upsert({ key: "projection_2027_enabled", value: enabled }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+  projectionCache = { at: Date.now(), enabled: enabled === 1 };
+  return await getInventoryMode();
 }
 
 async function pricingReference() {
@@ -303,6 +477,10 @@ async function callTool(name: string, args: Record<string, unknown>) {
       return await getGame(args);
     case "estimate_package":
       return await estimatePackage(args);
+    case "get_inventory_mode":
+      return await getInventoryMode();
+    case "set_inventory_mode":
+      return await setInventoryMode(args);
     case "pricing_reference":
       return await pricingReference();
     default:
@@ -336,8 +514,12 @@ async function handleMessage(msg: any): Promise<unknown | null> {
         capabilities: { tools: {} },
         serverInfo: SERVER_INFO,
         instructions:
-          "NBA augmentation inventory for the Genius Sports commercial team. Ask about available games, " +
-          "inventory by team/date/tier, pricing tiers, or estimate a media package. Data is read-only.",
+          "NBA augmentation inventory for the Genius Sports commercial team. " +
+          "DEFAULT SEASON IS UPCOMING 2027 — all inventory Open, dates shifted +1 year. Package-building and " +
+          "availability questions need no extra parameters. For LAST SEASON (2026) historical questions — e.g. " +
+          "'how many did we sell', 'what was pitched to Brand X' — pass season='2026' (or season='last') and " +
+          "filter status as needed (Sold, Pitched, etc.). " +
+          "Estimate packages with budget (USD) for RFPs. West-coast targeting: aug_conference='Western' + aug_timezone='Pacific'.",
       });
     case "ping":
       return rpcResult(id, {});

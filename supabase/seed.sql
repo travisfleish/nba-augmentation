@@ -3,7 +3,7 @@ begin;
 truncate package_games, packages, games restart identity cascade;
 delete from teams; delete from tiers; delete from tz_matrix; delete from settings;
 
-insert into settings(key,value) values ('logo_placements_per_game',10),('default_target_impressions',14000000);
+insert into settings(key,value) values ('logo_placements_per_game',10),('default_target_impressions',14000000),('projection_2027_enabled',1);
 
 insert into tiers(tier,score_lo,score_hi,cpm) values
 ('Tier 1',109,151,45),

@@ -176,6 +176,60 @@ header.top .sub {
   border-color: rgba(250, 93, 0, 0.4);
 }
 
+.badge.projection {
+  background: rgba(149, 236, 253, 0.12);
+  color: var(--color-lightBlue);
+  border-color: rgba(149, 236, 253, 0.35);
+}
+
+.projection-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  color: var(--muted);
+  cursor: default;
+  user-select: none;
+}
+
+.projection-toggle span.active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.projection-toggle .toggle {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel2);
+  cursor: pointer;
+  transition: background 200ms var(--ease-slide), border-color 200ms var(--ease-slide);
+}
+
+.projection-toggle .toggle.on {
+  background: rgba(0, 0, 220, 0.35);
+  border-color: rgba(149, 236, 253, 0.45);
+}
+
+.projection-toggle .toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-white);
+  transition: transform 200ms var(--ease-slide);
+}
+
+.projection-toggle .toggle.on .toggle-knob {
+  transform: translateX(18px);
+}
+
 /* ─── Tabs & Controls ─────────────────────────────────────────────────────── */
 .tabs { display: flex; gap: 6px; margin: 6px 0 18px; }
 

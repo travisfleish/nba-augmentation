@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db, MODE } from './lib/data.js'
+import { projectGamesFor2027 } from './lib/projection.js'
 import Logo from './components/brand/Logo.jsx'
 
 const STATUSES = ['Open', 'Pitched', 'Sold', 'Closed', 'N/A']
@@ -13,10 +14,12 @@ const usd2 = (n) => (n == null ? '—' : '$' + Number(n).toLocaleString('en-US',
 
 export default function App() {
   const [tab, setTab] = useState('inventory')
-  const [games, setGames] = useState([])
+  const [rawGames, setRawGames] = useState([])
   const [teams, setTeams] = useState([])
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
+  const [projection2027, setProjection2027] = useState(false)
+  const [projectionOverrides, setProjectionOverrides] = useState(() => new Map())
 
   // filters
   const [team, setTeam] = useState('All')
@@ -30,14 +33,43 @@ export default function App() {
   const [pkgAdv, setPkgAdv] = useState('')
 
   async function refresh() {
-    const [g, t] = await Promise.all([db.valuatedGames(), db.teams()])
-    setGames(g)
+    const [g, t, proj] = await Promise.all([db.valuatedGames(), db.teams(), db.getProjectionMode()])
+    setRawGames(g)
     setTeams(t)
+    setProjection2027(proj)
     setLoading(false)
   }
   useEffect(() => {
     refresh()
   }, [])
+
+  useEffect(() => {
+    setProjectionOverrides(new Map())
+  }, [projection2027])
+
+  const games = useMemo(() => {
+    let base = rawGames
+    if (MODE === 'demo' && projection2027) base = projectGamesFor2027(base)
+    if (!projection2027 || projectionOverrides.size === 0) return base
+    return base.map((g) => {
+      const patch = projectionOverrides.get(g.id)
+      return patch ? { ...g, ...patch } : g
+    })
+  }, [rawGames, projection2027, projectionOverrides])
+
+  async function toggleProjection(enabled) {
+    try {
+      await db.setProjectionMode(enabled)
+      setProjectionOverrides(new Map())
+      if (enabled) setStatus('All')
+      await refresh()
+      if (enabled) {
+        flash('Upcoming 2027 season — all games Open. Status edits are local-only.')
+      }
+    } catch (e) {
+      flash('Could not update projection mode: ' + e.message)
+    }
+  }
 
   function flash(msg) {
     setToast(msg)
@@ -60,7 +92,15 @@ export default function App() {
   }, [games, team, status, from, to])
 
   async function setGameField(id, patch) {
-    setGames((gs) => gs.map((g) => (g.id === id ? { ...g, ...patch } : g)))
+    if (projection2027) {
+      setProjectionOverrides((prev) => {
+        const next = new Map(prev)
+        next.set(id, { ...next.get(id), ...patch })
+        return next
+      })
+      return
+    }
+    setRawGames((gs) => gs.map((g) => (g.id === id ? { ...g, ...patch } : g)))
     try {
       await db.updateGame(id, patch)
     } catch (e) {
@@ -121,6 +161,21 @@ export default function App() {
         <span className={`badge ${MODE === 'supabase' ? 'live' : 'demo'}`}>
           {MODE === 'supabase' ? 'LIVE · Supabase' : 'DEMO · local seed'}
         </span>
+        {projection2027 && <span className="badge projection">Upcoming · 2027</span>}
+        {!projection2027 && <span className="badge demo">Last season · 2026</span>}
+        <label className="projection-toggle" title="Switch between last season (actual statuses) and upcoming 2027 (all Open)">
+          <span className={!projection2027 ? 'active' : ''}>Last season (2026)</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={projection2027}
+            className={`toggle ${projection2027 ? 'on' : ''}`}
+            onClick={() => toggleProjection(!projection2027)}
+          >
+            <span className="toggle-knob" />
+          </button>
+          <span className={projection2027 ? 'active' : ''}>Upcoming (2027)</span>
+        </label>
         <span className="spacer" />
         <span className="sub">{games.length} augmentable games · {augTeams.length} active teams</span>
       </header>

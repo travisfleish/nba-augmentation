@@ -11,20 +11,48 @@ export const MODE = URL && KEY ? 'supabase' : 'demo'
 
 const supabase = MODE === 'supabase' ? createClient(URL, KEY) : null
 
+const WESTERN = new Set([
+  'Golden State Warriors', 'Sacramento Kings', 'Los Angeles Clippers',
+  'Minnesota Timberwolves', 'San Antonio Spurs', 'Los Angeles Lakers',
+  'Houston Rockets', 'Utah Jazz', 'Phoenix Suns', 'Portland Trail Blazers',
+  'Dallas Mavericks', 'Denver Nuggets', 'Oklahoma City Thunder',
+  'Memphis Grizzlies', 'New Orleans Pelicans',
+])
+
+function teamConference(fullName) {
+  return WESTERN.has(fullName) ? 'Western' : 'Eastern'
+}
+
+function enrichGames(rows) {
+  return rows.map((g) => ({
+    ...g,
+    aug_conference: teamConference(g.aug_team),
+    aug_timezone: seed.teams.find((t) => t.full_name === g.aug_team)?.timezone ?? null,
+  }))
+}
+
 // ---------------- DEMO backend (in-memory) ----------------
 const refs = buildRefs(seed)
 let demoGames = structuredClone(seed.games)
 let demoPackages = []
 let demoPkgId = 1
+let demoProjection = true
 
 const demo = {
   async teams() {
-    return seed.teams
+    return seed.teams.map((t) => ({ ...t, conference: teamConference(t.full_name) }))
+  },
+  async getProjectionMode() {
+    return demoProjection
+  },
+  async setProjectionMode(enabled) {
+    demoProjection = enabled
   },
   async valuatedGames() {
-    return valuateAll(demoGames, refs).sort((a, b) =>
+    const rows = valuateAll(demoGames, refs).sort((a, b) =>
       a.game_date.localeCompare(b.game_date) || (a.game_time_et || '').localeCompare(b.game_time_et || '')
     )
+    return enrichGames(rows)
   },
   async updateGame(id, patch) {
     const g = demoGames.find((x) => x.id === id)
@@ -48,9 +76,26 @@ const live = {
     if (error) throw error
     return data
   },
-  async valuatedGames() {
+  async getProjectionMode() {
     const { data, error } = await supabase
-      .from('game_valuation')
+      .from('settings')
+      .select('value')
+      .eq('key', 'projection_2027_enabled')
+      .maybeSingle()
+    if (error) throw error
+    return data == null ? true : Number(data?.value) === 1
+  },
+  async setProjectionMode(enabled) {
+    const { error } = await supabase
+      .from('settings')
+      .upsert({ key: 'projection_2027_enabled', value: enabled ? 1 : 0 }, { onConflict: 'key' })
+    if (error) throw error
+  },
+  async valuatedGames() {
+    const projection = await this.getProjectionMode()
+    const view = projection ? 'inventory_catalog_projection' : 'inventory_catalog'
+    const { data, error } = await supabase
+      .from(view)
       .select('*')
       .order('game_date')
       .limit(2000)
