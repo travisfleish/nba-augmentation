@@ -68,17 +68,45 @@ function seasonLabel(projection: boolean): string {
   return projection ? "2027" : "2026";
 }
 
-async function resolveProjection(args: Record<string, unknown>): Promise<boolean> {
-  const season = args.season != null ? String(args.season).trim().toLowerCase() : null;
-  if (season) {
-    if (["2027", "upcoming", "next", "projection"].includes(season)) return true;
-    if (["2026", "last", "previous", "prior"].includes(season)) return false;
+function isHistoricalStatusQuery(status?: string[]): boolean {
+  if (!status?.length) return false;
+  const historical = new Set(["Sold", "Pitched", "Closed", "N/A"]);
+  return status.every((s) => historical.has(s));
+}
+
+const LAST_SEASON_ALIASES = new Set([
+  "2026", "last", "previous", "prior",
+  "last year", "last season", "previous season", "prior season",
+]);
+
+async function resolveSeason(
+  args: Record<string, unknown>,
+): Promise<{ projection: boolean; season: string; season_auto_inferred: boolean }> {
+  const seasonArg = args.season != null ? String(args.season).trim().toLowerCase() : null;
+  if (seasonArg) {
+    if (["2027", "upcoming", "next", "projection"].includes(seasonArg)) {
+      return { projection: true, season: "2027", season_auto_inferred: false };
+    }
+    if (LAST_SEASON_ALIASES.has(seasonArg)) {
+      return { projection: false, season: "2026", season_auto_inferred: false };
+    }
     throw new Error(
-      `Unknown season '${args.season}'. Use '2027' (upcoming, default) or '2026' (last season).`,
+      `Unknown season '${args.season}'. Use '2027' (upcoming, default) or '2026' / 'last' (last season).`,
     );
   }
-  if (typeof args.use_projection === "boolean") return args.use_projection;
-  return await isProjectionEnabled();
+  if (typeof args.use_projection === "boolean") {
+    return {
+      projection: args.use_projection,
+      season: seasonLabel(args.use_projection),
+      season_auto_inferred: false,
+    };
+  }
+  // Sold/Pitched/Closed on the 2027 projection is always empty — use last season automatically.
+  if (isHistoricalStatusQuery(args.status as string[] | undefined)) {
+    return { projection: false, season: "2026", season_auto_inferred: true };
+  }
+  const enabled = await isProjectionEnabled();
+  return { projection: enabled, season: seasonLabel(enabled), season_auto_inferred: false };
 }
 
 function applyFilters(q: any, a: Record<string, unknown>) {
@@ -131,10 +159,11 @@ function fmtUSD(n: number): string {
 const FILTER_PROPS = {
   season: {
     type: "string",
-    enum: ["2027", "2026", "upcoming", "last"],
+    enum: ["2027", "2026", "upcoming", "last", "last season", "last year"],
     description:
-      "Which season to query. Default (omit or '2027'/'upcoming'): upcoming 2027 projection — dates +1 year, all inventory Open. " +
-      "Use '2026' or 'last' for last season with real statuses (Sold, Closed, Pitched, etc.) — e.g. 'how many did we sell last season'.",
+      "REQUIRED for historical questions. Default (omit): upcoming 2027 — all Open. " +
+      "For 'how many did we sell last year/season', 'what was pitched', etc. ALWAYS pass season='2026' or season='last'. " +
+      "The 2027 projection has no Sold/Pitched/Closed data.",
   },
   use_projection: {
     type: "boolean",
@@ -197,7 +226,9 @@ const TOOLS = [
     name: "inventory_summary",
     description:
       "Aggregate roll-up: counts by status and tier, open inventory value. " +
-      "Defaults to upcoming 2027. For last-season sold/pitched totals, pass season='2026' and filter status as needed.",
+      "Defaults to upcoming 2027 for availability. " +
+      "CRITICAL: For sold/pitched/closed counts or 'last year' questions, pass season='2026' (or season='last'). " +
+      "Querying Sold without season returns 0 because 2027 projection is all Open.",
     inputSchema: { type: "object", properties: { ...FILTER_PROPS } },
   },
   {
@@ -280,7 +311,7 @@ const TOOLS = [
 async function listInventory(a: Record<string, unknown>) {
   const limit = Math.min(Number(a.limit ?? 50) || 50, 200);
   const status = (a.status as string[] | undefined) ?? ["Open"];
-  const projection = await resolveProjection(a);
+  const { projection, season, season_auto_inferred } = await resolveSeason(a);
   const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
   let q = sb.from(table).select(GAME_FIELDS);
   q = applyFilters(q, { ...a, status });
@@ -288,16 +319,17 @@ async function listInventory(a: Record<string, unknown>) {
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   const rows = data ?? [];
-  const season = seasonLabel(projection);
+  const inferred =
+    season_auto_inferred ? " (auto-selected last season — Sold/Pitched/Closed not on 2027 projection)" : "";
   const summary =
-    `${rows.length} game(s) for ${season} season` +
+    `${rows.length} game(s) for ${season} season${inferred}` +
     (rows.length === limit ? ` (capped at ${limit})` : "") +
     `, statuses: ${status.join(", ")}.`;
-  return { summary, season, inventory_mode: table, games: rows };
+  return { summary, season, season_auto_inferred, inventory_mode: table, games: rows };
 }
 
 async function inventorySummary(a: Record<string, unknown>) {
-  const projection = await resolveProjection(a);
+  const { projection, season, season_auto_inferred } = await resolveSeason(a);
   const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
   let q = sb
     .from(table)
@@ -306,7 +338,6 @@ async function inventorySummary(a: Record<string, unknown>) {
   const { data, error } = await q.limit(2000);
   if (error) throw new Error(error.message);
   const rows = data ?? [];
-  const season = seasonLabel(projection);
 
   const byStatus: Record<string, number> = {};
   const byTier: Record<string, number> = {};
@@ -320,14 +351,17 @@ async function inventorySummary(a: Record<string, unknown>) {
       availValue += Number(r.game_cost ?? 0);
     }
   }
+  const inferred =
+    season_auto_inferred ? " Auto-selected 2026 last season (Sold/Pitched/Closed not on 2027 projection)." : "";
   return {
     summary:
       `${rows.length} game(s) for ${season} season. Open: ${byStatus["Open"] ?? 0}, ` +
       `Pitched: ${byStatus["Pitched"] ?? 0}, Sold: ${byStatus["Sold"] ?? 0}, ` +
       `Closed: ${byStatus["Closed"] ?? 0}. ` +
       `Open inventory ≈ ${Math.round(availImpr).toLocaleString("en-US")} impressions, ` +
-      `${fmtUSD(availValue)} value.`,
+      `${fmtUSD(availValue)} value.${inferred}`,
     season,
+    season_auto_inferred,
     inventory_mode: table,
     total_games: rows.length,
     by_status: byStatus,
@@ -340,7 +374,7 @@ async function inventorySummary(a: Record<string, unknown>) {
 }
 
 async function getGame(a: Record<string, unknown>) {
-  const projection = await resolveProjection(a);
+  const { projection, season, season_auto_inferred } = await resolveSeason(a);
   const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
   let q = sb.from(table).select(GAME_FIELDS);
   if (a.id != null) {
@@ -355,15 +389,14 @@ async function getGame(a: Record<string, unknown>) {
   const { data, error } = await q.limit(10);
   if (error) throw new Error(error.message);
   const rows = data ?? [];
-  return { count: rows.length, season: seasonLabel(projection), inventory_mode: table, games: rows };
+  return { count: rows.length, season, season_auto_inferred, inventory_mode: table, games: rows };
 }
 
 async function estimatePackage(a: Record<string, unknown>) {
   const target = Number(a.target_impressions ?? 14000000) || 14000000;
   const budget = a.budget != null ? Number(a.budget) : null;
-  const projection = await resolveProjection(a);
+  const { projection, season, season_auto_inferred } = await resolveSeason(a);
   const table = projection ? "inventory_catalog_projection" : "inventory_catalog";
-  const season = seasonLabel(projection);
   let rows: any[] = [];
   if (Array.isArray(a.game_ids) && a.game_ids.length) {
     const { data, error } = await sb
@@ -407,6 +440,7 @@ async function estimatePackage(a: Record<string, unknown>) {
       budgetNote +
       `${fmtUSD(cost)} total, ${fmtUSD(blendedCpm)} blended CPM.`,
     season,
+    season_auto_inferred,
     inventory_mode: table,
     games_count: rows.length,
     total_impressions: Math.round(impr),
@@ -515,11 +549,12 @@ async function handleMessage(msg: any): Promise<unknown | null> {
         serverInfo: SERVER_INFO,
         instructions:
           "NBA augmentation inventory for the Genius Sports commercial team. " +
-          "DEFAULT SEASON IS UPCOMING 2027 — all inventory Open, dates shifted +1 year. Package-building and " +
-          "availability questions need no extra parameters. For LAST SEASON (2026) historical questions — e.g. " +
-          "'how many did we sell', 'what was pitched to Brand X' — pass season='2026' (or season='last') and " +
-          "filter status as needed (Sold, Pitched, etc.). " +
-          "Estimate packages with budget (USD) for RFPs. West-coast targeting: aug_conference='Western' + aug_timezone='Pacific'.",
+          "TWO SEASONS: (1) UPCOMING 2027 is the DEFAULT — all games Open, dates +1 year. Use for availability, " +
+          "RFPs, and package building. (2) LAST SEASON 2026 has real Sold/Pitched/Closed history. " +
+          "RULE: Any question about 'sold', 'pitched', 'closed', 'last year', or 'last season' MUST use season='2026' " +
+          "or season='last' on inventory_summary/list_inventory. Without it, Sold queries return 0 (2027 is all Open). " +
+          "If status filter is Sold/Pitched/Closed only, the server auto-selects 2026. " +
+          "Package RFPs: estimate_package with budget (USD). West coast: aug_conference='Western' + aug_timezone='Pacific'.",
       });
     case "ping":
       return rpcResult(id, {});
